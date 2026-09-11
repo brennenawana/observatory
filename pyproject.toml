@@ -1,0 +1,13 @@
+[project]
+name = "observatory"
+version = "0.1.0"
+description = "A pluggable observability substrate for AI agents and the systems they touch."
+requires-python = ">=3.10"
+dependencies = []          # stdlib only, on purpose: it has to drop into anything
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["observatory"]

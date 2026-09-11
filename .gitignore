@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Records are the user's, never ours. Nothing produced by a run is committed.
+runs/
+workspace/
+*.jsonl
+!examples/**/*.jsonl
+
+# maintainer-local notes never ship
+local/
+NOTES.md
+TODO.md
