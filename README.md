@@ -65,6 +65,16 @@ Run the conformance checks:
 python3 -m observatory.selftest
 ```
 
+## Hermes adapter
+
+Version `0.2.0` includes a metadata-only Hermes observer. It records local,
+append-only execution evidence without adding a model-visible tool. It does not
+persist prompts, responses, tool argument values, tool result values, commands,
+source code, or file paths.
+
+See [HERMES.md](HERMES.md) for the event profile, installation steps, storage
+path, sprint-planning signals, and current limits.
+
 ## Three things worth knowing before you use it
 
 **A replay miss raises.** It does not fall through to the live call. That is what makes
@@ -87,12 +97,12 @@ Early. What is here works and is covered by 27 conformance checks; what is not h
 listed honestly rather than implied.
 
 **Built:** the contract; the reference ledger, capture, redactor and probe; the
-conformance suite.
+conformance suite; and the metadata-only Hermes observer.
 
 **Not built yet:**
 
-- **Adapters.** Harness hooks and an endpoint proxy (the agent-facing side), and code-seam
-  wrapping (the system-facing side). The contract is designed for both; neither ships yet.
+- **Additional adapters.** The Hermes metadata observer ships. Endpoint proxies,
+  other harness hooks, and code-seam wrapping do not ship yet.
 - **The extraction proof.** The real test of whether this abstraction is honest is whether
   it can replace a working recorder without changing its results. The candidate is a data
   ingest rig with an exact target to hit — a frozen funnel fingerprint and a 586-entry

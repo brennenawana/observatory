@@ -1,9 +1,12 @@
 [project]
 name = "observatory"
-version = "0.1.0"
+version = "0.2.0"
 description = "A pluggable observability substrate for AI agents and the systems they touch."
 requires-python = ">=3.10"
 dependencies = []          # stdlib only, on purpose: it has to drop into anything
+
+[project.entry-points."hermes_agent.plugins"]
+observatory = "observatory.hermes_plugin"
 
 [build-system]
 requires = ["setuptools>=61"]
