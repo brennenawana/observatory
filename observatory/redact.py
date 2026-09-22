@@ -84,7 +84,15 @@ class Redactor:
     def scrub(self, value: Any, *, key_hint: str | None = None) -> Any:
         """Return a copy with every detected credential replaced by ``REDACTED``."""
         if key_hint and _SECRET_KEY.search(_canonical_key_name(key_hint)):
-            return value if value is None or value == "" else REDACTED
+            # A credential's value is always string-shaped (or absent). A plain
+            # number or boolean under a matched key name (e.g. a "tokens_in"
+            # usage count, not an "api_token" secret) cannot itself be a
+            # credential value, so it passes through unredacted. Strings,
+            # dicts, and lists under a matched key are still fully redacted —
+            # only the definitively-safe scalar types are exempted.
+            if value is None or value == "" or isinstance(value, (int, float, bool)):
+                return value
+            return REDACTED
         if isinstance(value, dict):
             cleaned: dict[str, Any] = {}
             for key, item in value.items():
