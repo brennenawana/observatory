@@ -16,7 +16,8 @@ import hashlib
 import json
 import os
 import pathlib
-from typing import Any, Callable, Iterable
+from collections.abc import Callable, Iterable
+from typing import Any
 
 from .contract import CaptureMiss, ObservatoryError
 from .redact import Redactor
@@ -40,10 +41,18 @@ def request_key(*parts: Any) -> str:
 class FileCapture:
     """A JSONL-backed keyed store with record and replay modes."""
 
-    def __init__(self, path: str | os.PathLike[str], mode: str = REPLAY, *,
-                 secrets: Iterable[str] = (), redactor: Redactor | None = None) -> None:
+    def __init__(
+        self,
+        path: str | os.PathLike[str],
+        mode: str = REPLAY,
+        *,
+        secrets: Iterable[str] = (),
+        redactor: Redactor | None = None,
+    ) -> None:
         if mode not in (RECORD, REPLAY):
-            raise ObservatoryError(f"mode must be {RECORD!r} or {REPLAY!r}, got {mode!r}")
+            raise ObservatoryError(
+                f"mode must be {RECORD!r} or {REPLAY!r}, got {mode!r}"
+            )
         self.path = pathlib.Path(path)
         self.mode = mode
         self.redactor = redactor or Redactor(secrets)
@@ -52,14 +61,14 @@ class FileCapture:
         self.recorded = 0
         self._entries: dict[str, Any] = {}
         if self.path.exists():
-            with self.path.open("r", encoding="utf-8") as fh:
+            with self.path.open("rb") as fh:
                 for line in fh:
                     line = line.strip()
                     if not line:
                         continue
                     try:
                         row = json.loads(line)
-                    except json.JSONDecodeError:
+                    except (json.JSONDecodeError, UnicodeDecodeError):
                         continue
                     if isinstance(row, dict) and "key" in row:
                         self._entries[row["key"]] = row.get("value")
@@ -87,16 +96,35 @@ class FileCapture:
         return value
 
     def _append(self, key: str, value: Any) -> None:
-        row = {"key": key, "value": self.redactor.scrub(value)}
-        self._entries[key] = row["value"]
-        self.recorded += 1
+        try:
+            row = {"key": key, "value": self.redactor.scrub(value)}
+            encoded = (
+                json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n"
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ObservatoryError(
+                "Capture values must contain JSON-compatible values"
+            ) from exc
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+        with self.path.open("a+b") as fh:
+            fh.seek(0, os.SEEK_END)
+            if fh.tell() > 0:
+                fh.seek(-1, os.SEEK_END)
+                if fh.read(1) != b"\n":
+                    fh.write(b"\n")
+            fh.write(encoded)
             fh.flush()
             os.fsync(fh.fileno())
+        self._entries[key] = row["value"]
+        self.recorded += 1
 
     def summary(self) -> dict[str, Any]:
         """What a run should print so 'it stayed offline' is shown, not assumed."""
-        return {"mode": self.mode, "entries": len(self._entries), "hits": self.hits,
-                "misses": self.misses, "recorded": self.recorded, "path": str(self.path)}
+        return {
+            "mode": self.mode,
+            "entries": len(self._entries),
+            "hits": self.hits,
+            "misses": self.misses,
+            "recorded": self.recorded,
+            "path": str(self.path),
+        }

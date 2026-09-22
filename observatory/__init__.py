@@ -1,6 +1,6 @@
-"""observatory — a pluggable observability substrate for AI agents and the systems they touch.
+"""Observatory provides a generic observability reference implementation.
 
-CONTRACT.md is normative; this package is the reference implementation of it.
+CONTRACT.md provides implementation guidance. Projects derive their own capture profiles.
 
     from observatory import Event, JsonlLedger, FileCapture, probe, request_key
 
@@ -16,8 +16,8 @@ from .capture import RECORD, REPLAY, FileCapture, request_key
 from .contract import (
     GRADES,
     GROUND_TRUTH,
-    CaptureMiss,
     Capture,
+    CaptureMiss,
     Event,
     Ledger,
     ObservatoryError,
@@ -28,14 +28,31 @@ from .contract import (
 from .ledger import JsonlLedger
 from .probe import Check, ProbeResult, probe
 from .redact import REDACTED, Redactor, redact
+from .secure_ledger import SecureJsonlLedger
 
 __all__ = [
-    "GRADES", "GROUND_TRUTH", "Event", "Ledger", "Capture",
-    "ObservatoryError", "UnknownGrade", "CaptureMiss",
-    "now_utc", "now_mono",
-    "JsonlLedger", "FileCapture", "request_key", "RECORD", "REPLAY",
-    "Redactor", "redact", "REDACTED",
-    "probe", "ProbeResult", "Check",
+    "GRADES",
+    "GROUND_TRUTH",
+    "RECORD",
+    "REDACTED",
+    "REPLAY",
+    "Capture",
+    "CaptureMiss",
+    "Check",
+    "Event",
+    "FileCapture",
+    "JsonlLedger",
+    "Ledger",
+    "ObservatoryError",
+    "ProbeResult",
+    "Redactor",
+    "SecureJsonlLedger",
+    "UnknownGrade",
+    "now_mono",
+    "now_utc",
+    "probe",
+    "redact",
+    "request_key",
 ]
 
 __version__ = "0.2.0"

@@ -1,4 +1,4 @@
-"""The contract's types and vocabularies. See CONTRACT.md — that document is normative.
+"""Generic contract types and vocabularies. CONTRACT.md provides implementation guidance.
 
 This module deliberately holds no I/O and no policy. It is the part another
 implementation imports (or re-declares) when it wants to satisfy the same contract
@@ -8,16 +8,17 @@ without using this repository's ledger and capture.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field, asdict
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Iterable, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 #: How we know a thing happened. CONTRACT.md §3. Fixed on purpose: a grade that can be
 #: invented at the call site launders a guess into a measurement.
 GRADES: tuple[str, ...] = ("native", "proxy", "seam", "self_reported")
 
-#: The grades that are observations of the system rather than the system's own account
-#: of itself. A finding resting on a non-ground-truth row must say so.
+#: Legacy name for grades that provide direct evidence of a boundary event.
+#: These grades do not prove every assertion inside an event payload.
 GROUND_TRUTH: frozenset[str] = frozenset({"native", "proxy", "seam"})
 
 
@@ -33,11 +34,9 @@ class CaptureMiss(ObservatoryError):
     """Replay was asked for a boundary crossing that was never recorded.
 
     This is the contract's load-bearing failure. It is a RuntimeError rather than
-    anything resembling a transport or provider error, because consuming tools catch
-    *their own* error types and fall back. In wikiskills-lab the model path catches
-    provider errors and silently drops a tier, so a miss dressed as a provider error
-    would have been invisible — a replay that quietly became a live call, reported as
-    if it had stayed offline.
+    a transport or provider error. A consumer can catch those errors and use a live
+    fallback. A distinct error prevents a replay miss from becoming an unreported
+    live call.
     """
 
 
@@ -56,8 +55,8 @@ class Event:
     """One thing that happened. CONTRACT.md §1.
 
     Both clocks are captured at construction rather than accepted as arguments, so a
-    caller cannot forget one. Playbook 12 §5.1 puts dual clocks on the telemetry floor:
-    a single-clock recorder cannot detect the clock skew it exists to surface.
+    caller cannot omit one. A single-clock recorder cannot detect wall-clock changes
+    while it measures elapsed time.
     """
 
     kind: str
@@ -77,18 +76,20 @@ class Event:
             )
         for name in ("kind", "subject", "source"):
             if not str(getattr(self, name) or "").strip():
-                raise ObservatoryError(f"Event.{name} is required and must be non-empty")
+                raise ObservatoryError(
+                    f"Event.{name} is required and must be non-empty"
+                )
 
     @property
     def is_ground_truth(self) -> bool:
-        """False for self-reported rows. Consumers must label findings accordingly."""
+        """Use the legacy name for direct boundary evidence."""
         return self.grade in GROUND_TRUTH
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, row: dict[str, Any]) -> "Event":
+    def from_dict(cls, row: dict[str, Any]) -> Event:
         """Rebuild from a stored row, preserving its original clocks."""
         known = {"kind", "subject", "grade", "source", "data", "at_utc", "at_mono"}
         return cls(**{k: v for k, v in row.items() if k in known})

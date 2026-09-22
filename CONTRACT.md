@@ -1,34 +1,14 @@
 # The observability contract
 
-This is the primary artifact in this repository. The code under `observatory/` is a
-reference implementation of it, not the definition of it.
+This is the primary artifact in this repository. It provides generic implementation
+guidance. The code under `observatory/` is a reference implementation.
 
-A tool that needs to watch itself — [wikiskills-lab](https://github.com/brennenawana/wikiskills-lab)
-is the first — programs against this contract. Anyone who prefers their own recorder
-implements the same contract and swaps it in. That substitution is the point; a tool
-that hard-codes one recorder has chosen its observability system for every future user.
+A project derives its own capture profile from this contract. The project owns its event
+names, fields, correlation rules, storage policy, and retention policy. Projects do not
+need one universal schema.
 
-## Where this comes from
-
-Not invented. Two independent implementations, built months apart for different
-problems, arrived at the same five operations:
-
-| Operation | wikiskills-lab | the crexi ingest rig |
-|---|---|---|
-| Append to a durable record | `engine/journal.py` | per-asset JSONL trace |
-| Capture at a boundary | `engine/recorder/proxy.py`, `hooks/` | seam-wrapping in `rig/trace.py` |
-| Replay, failing closed on a miss | proxy replay mode | `rig/cassette.py` → `CassetteMiss` |
-| Grade the evidence | telescopes A / A / C | `rig/provenance.py` producer vocabulary |
-| Prove the instrument before trusting it | `engine/recorder/probe.py` + calibration | preflight + counter reconciliation |
-
-Both also redact at write time. Two people solving unrelated problems built the same
-six things, so these are the operations, and this document just writes them down.
-
-The methodology behind them is not restated here. It lives in the Adaptive Systems
-Playbook, chapter 12 — `§5.1` the telemetry floor, `§5.2` the minimum trajectory record,
-`§5.3` choosing depth and audience. **This repository cites those sections and
-implements them. It never paraphrases them**, because a paraphrase drifts from its
-source and then two documents disagree about what the rule is.
+Consumers use this contract through replaceable implementations. A consumer must not
+require one recorder for all users.
 
 ---
 
@@ -41,15 +21,13 @@ The unit of record. One thing that happened.
 | `at_utc` | yes | Realtime stamp, ISO 8601, UTC. |
 | `at_mono` | yes | Monotonic stamp from the same process. |
 | `kind` | yes | What sort of thing happened. Free vocabulary, owned by the caller. |
-| `subject` | yes | What it is about — a session, a task, an asset id. The join key. |
+| `subject` | yes | The session, task, asset, or other join key. |
 | `grade` | yes | How we know. From §3's fixed set. |
 | `source` | yes | Which component wrote the row. |
 | `data` | yes | Everything else. Redacted before it is persisted (§5). |
 
-**Both clocks are required, and this is not negotiable.** Playbook `12 §5.1` puts dual
-clocks on the telemetry floor: virtualization and power management skew a realtime clock,
-and the skew stays invisible until something cross-checks the two. A recorder that writes
-one clock cannot detect the defect it exists to make visible.
+**Both clocks are required.** Realtime clocks can change during a run. A monotonic clock
+provides stable elapsed-time measurements within one process.
 
 `at_mono` is only comparable **within one process**. Across processes it orders nothing.
 An implementation MUST NOT present cross-process monotonic differences as durations.
@@ -58,8 +36,8 @@ An implementation MUST NOT present cross-process monotonic differences as durati
 
 An append-only sequence of Events.
 
-- `append(event)` — persist one Event. MUST redact first (§5).
-- `read(subject=None, kind=None, since=None)` — iterate Events, oldest first.
+- `append(event)`: Persist one Event. MUST redact first (§5).
+- `read(subject=None, kind=None, since=None)`: Iterate Events, oldest first.
 
 Rules:
 
@@ -67,35 +45,39 @@ Rules:
   after the fact cannot settle a disagreement about what happened, which is the only
   reason it exists.
 - **Durable before returning.** `append` returns after the row is on disk, not after it
-  is queued. A crash is exactly when the record matters most.
-- **Survives restarts.** Playbook `12 §5.1` makes this a MUST: a log that truncates on
-  restart destroys precisely the sessions a forensic reconstruction needs.
+  is queued. A crash is exactly when the record matters most. When an append creates a
+  file or directory entry, it MUST also synchronize the containing directory.
+- **Survives restarts.** A restart must not truncate earlier records.
 - **Partial reads are legal.** A truncated final row is skipped, not fatal. A process
   killed mid-write must not poison the whole ledger.
+- **A later append starts a new row.** It must not attach valid data to an incomplete
+  final row.
 
-## 3. Grade — how we know
+## 3. Grade: how we know
 
 Every Event carries one value from this fixed set. An unknown value MUST raise rather
 than be stored, because a grade that silently defaults is worse than no grade: it
 launders a guess into a measurement.
 
-| Grade | What produced it | Ground truth? |
+| Grade | What produced it | Direct evidence of the boundary event? |
 |---|---|---|
-| `native` | The tool emitted it itself — hooks, event logs, transcripts. | Yes |
-| `proxy` | We intercepted the boundary it crossed — an endpoint, an HTTP call. | Yes |
+| `native` | The tool emitted it itself: hooks, event logs, or transcripts. | Yes |
+| `proxy` | We intercepted an endpoint or protocol boundary. | Yes |
 | `seam` | We wrapped the code path in-process. | Yes |
 | `self_reported` | The observed agent described its own action. | **No** |
 
 `self_reported` is the load-bearing distinction. An agent's account of itself is
 evidence about what it *says* it did. Any finding resting on it MUST be presented that
-way — "the agent reports it read the file", never "the agent read the file". A consumer
+way. Use "the agent reports it read the file," not "the agent read the file." A consumer
 that cannot show grades in its output should not accept `self_reported` rows at all.
 
-A future grade for value-level provenance — which component produced a number, and what
-it fell back from — is a declared extension point, not yet specified here. The crexi
-rig's producer vocabulary is the input for that work.
+A direct grade proves that the source emitted the recorded boundary event. It does not
+prove every claim inside the payload. A profile must define which fields it trusts.
 
-## 4. Capture — record and replay a boundary
+A future grade for value-level provenance is a declared extension point. This contract
+does not define that grade.
+
+## 4. Capture: record and replay a boundary
 
 A boundary is anywhere the system reaches something it does not control: a model
 endpoint, an HTTP API, a clock, a database.
@@ -107,24 +89,22 @@ endpoint, an HTTP API, a clock, a database.
 
 **The miss MUST raise.** This is the single rule that separates a proof from an
 assumption. A recorder that quietly falls through to the real call on a miss cannot tell
-you whether a replay actually stayed offline — and the failure is silent, so you find out
+you whether a replay stayed offline. The failure is silent, so you find out
 by publishing a number that was measured against a live service you thought you had cut.
-Both reference implementations raise, and both were verified by pointing the base URL at
-an unreachable address and confirming the run still completed from the recording alone.
-
 The raise MUST be an exception type the calling tool does not already swallow. In
-wikiskills-lab this was decisive: the LLM path catches its own provider errors and falls
-back a tier, so a miss surfacing as a provider error would have been invisible —
-indistinguishable from the no-model arm.
+some systems, provider errors cause a fallback. A replay miss must remain distinct from
+those errors.
 
 `key` MUST be derived from the *request*, never from a caller-supplied label. Two
 identical requests are the same question. A key built from an id would serve a stale
 answer after the request changed.
 
-## 5. Redaction — at write time, never after
+## 5. Redaction: at write time, never after
 
 - `redact(data)` runs **before** anything is persisted.
 - A secret's **existence** may be recorded. Its **value** never is.
+- A secret-named field redacts its value regardless of the value type.
+- A writer rejects non-JSON values. It does not stringify them before redaction.
 
 Retroactive redaction is not a substitute. Once a value is on disk it is on disk, and
 every backup and replica took it with them.
@@ -134,13 +114,14 @@ an event, then assert that the value cannot be found anywhere in the stored byte
 test is not optional, because redaction that is merely believed to work is the single
 highest-consequence failure in this whole contract.
 
-## 6. Probe — prove the instrument before trusting it
+## 6. Probe: prove the instrument before trusting it
 
-Playbook `00` P2: the instrument outranks the score. A record nobody has verified is
-being collected is not evidence of anything.
+A record is not usable evidence until a probe verifies the recorder.
 
 - `probe()` returns a result with `ready: bool` and a list of named checks.
-- `ready` false MUST block the work that depends on the record, not merely warn.
+- `ready` false MUST block each claim or decision that depends on the record.
+- A shadow recorder MAY let unrelated work continue. It MUST report the record as
+  unavailable and MUST NOT certify the run as complete.
 
 A probe answers one question: if something happened right now, would this ledger show
 it? The reference implementation writes a canary event, reads it back, and confirms
@@ -158,5 +139,57 @@ An implementation conforms when it satisfies, in order:
 4. A planted secret does not appear in stored bytes.
 5. A probe reports `ready` false when the ledger cannot round-trip an event.
 
-`observatory/selftest.py` checks all five against the reference implementation. A
-different implementation should be able to run the same checks against itself.
+`observatory/selftest.py` tests selected requirements against the bundled JSONL
+implementation. It does not prove that a consuming tool propagates `CaptureMiss`.
+Other implementations must use this checklist and implementation-specific tests.
+
+---
+
+## 7. Capture profiles
+
+A capture profile applies this contract to one project or host. It MUST define:
+
+- its scope and version;
+- its event vocabulary;
+- its join keys;
+- the evidence grade for each source;
+- allowed and excluded data fields;
+- completeness rules;
+- its storage threat model;
+- retention and deletion authority.
+
+A profile MUST classify values before storage. Fixed enums, finite numbers, Booleans,
+opaque identifiers, content, and credentials need different treatment. Arbitrary strings
+MUST NOT become safe only because an implementation calls them metadata.
+
+An opaque identifier SHOULD use a keyed and domain-separated hash. Hash the complete
+value. The profile MUST define key scope, key rotation, and correlation limits. Content
+and credential values MUST follow §5.
+
+See `docs/CAPTURE_PROFILES.md` for profile design guidance.
+
+## 8. Completeness
+
+Readiness and completeness are different properties.
+
+- `ready` means the recorder passed its startup probe.
+- `complete` means it captured every event required by its profile.
+- `incomplete` means it detected a dropped event, write error, missing required event, or
+  missing required join.
+- `unavailable` means it could not start safely.
+
+A fail-open adapter MAY keep the observed system running. It MUST mark its evidence as
+incomplete or unavailable. It MUST NOT turn missing evidence into a successful result.
+
+## 9. Storage threat models
+
+An implementation MUST declare what its ledger protects against.
+
+The reference `JsonlLedger` assumes a trusted local path. It does not protect against a
+hostile process that replaces the ledger or a parent directory.
+
+The reference `SecureJsonlLedger` uses descriptor-relative and no-follow file operations.
+It uses private permissions and rejects link or inode replacement. It refuses to start
+when the required file operations are unavailable.
+
+A project can use another ledger. Its profile MUST state the different guarantees.

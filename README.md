@@ -1,118 +1,113 @@
 # observatory
 
-A pluggable observability substrate for AI agents and the systems they touch.
+Observatory defines a generic observability contract for AI agents and other automated systems.
 
-Watching an agent work is its own system. It has uptime, storage that grows, retention
-rules, and it breaks every time a harness changes its hook format. That is why this is a
-separate repository rather than a folder inside the tool it serves: it has its own
-lifecycle, and it will outlive any one consumer.
-
-It is deliberately small, has **no dependencies**, and is stdlib-only Python 3.10+, so it
-can drop into whatever is already running — Claude Code, OpenCode, Codex, a local model
-behind an endpoint, or a pipeline of your own.
+The repository has no agent-runtime or IDE dependency.
 
 ## The contract is the product
 
-**[CONTRACT.md](CONTRACT.md) is the primary artifact.** The code here is a reference
-implementation of it.
+[CONTRACT.md](https://github.com/brennenawana/observatory/blob/main/CONTRACT.md) contains implementation guidance. The Python package provides one reference implementation.
 
-A tool that needs to observe itself programs against the contract, not against this
-package. Anyone who prefers their own recorder implements the same contract and swaps it
-in. That substitution is the whole design: a tool that hard-codes one recorder has picked
-the observability system for every future user of it.
+Each project can define its own event vocabulary and capture policy. It does not need to copy one universal schema. See [capture profiles](https://github.com/brennenawana/observatory/blob/main/docs/CAPTURE_PROFILES.md).
 
-The contract was not invented. Two implementations built months apart for unrelated
-problems — an agent coach and a data-ingest rig — independently arrived at the same six
-operations: append to a durable record, capture at a boundary, replay failing closed on a
-miss, grade the evidence, redact at write time, and prove the instrument before trusting
-it. CONTRACT.md writes those down and says why each one is shaped the way it is.
+The contract defines six common operations:
 
-## Where the methodology lives
+1. Append events to a durable ledger.
+2. Capture calls at system boundaries.
+3. Fail closed when replay data is missing.
+4. State the evidence grade.
+5. Redact data before storage.
+6. Test the recorder before trusting its output.
 
-The *principles* are not here. They are in the Adaptive Systems Playbook, chapter 12:
+## Install
 
-- `12 §5.1` — the telemetry floor: what must be recording before a long or expensive run.
-- `12 §5.2` — the minimum trajectory record.
-- `12 §5.3` — how much to record, and who the record is for.
+```bash
+python3 -m pip install .
+```
 
-This repository **cites those sections and implements them. It never paraphrases them.**
-A paraphrase drifts from its source, and then two documents disagree about what the rule
-is — which is a failure this project has already had to clean up once elsewhere.
+The distribution name is `agent-observatory-contract`. The Python import name remains `observatory`.
+
+Observatory supports Python 3.10 and later. The reference package uses only the Python standard library.
 
 ## Quick start
 
 ```python
-from observatory import Event, JsonlLedger, FileCapture, probe, request_key
+from observatory import Event, JsonlLedger, probe
 
-led = JsonlLedger("runs/ledger.jsonl", secrets=[my_token])
-probe(led).raise_if_not_ready()      # blocks, rather than warns, if it cannot record
-
-led.append(Event(
-    kind="task.start", subject=task_id, grade="seam", source="my-tool",
-    data={"prompt_tokens": 812},
-))
-
-cap = FileCapture("runs/boundary.jsonl", mode="replay")
-reply = cap.through(
-    request_key("POST", "/v1/messages", body),
-    lambda: client.post("/v1/messages", body),   # never called in replay mode
+ledger = JsonlLedger("runs/ledger.jsonl", secrets=[my_token])
+probe(ledger).raise_if_not_ready()
+ledger.append(
+    Event(
+        kind="task.start",
+        subject=task_id,
+        grade="seam",
+        source="my-tool",
+        data={"prompt_tokens": 812},
+    )
 )
 ```
 
-Run the conformance checks:
+Use `JsonlLedger` only when you trust the local path and its parent directories.
 
+Use `SecureJsonlLedger` for private local records on supported POSIX systems:
+
+```python
+from observatory import SecureJsonlLedger
+
+ledger = SecureJsonlLedger(
+    "~/.local/share/my-observer",
+    relative_dir=("runs", run_id_hash),
+    filename="events.jsonl",
+)
 ```
+
+`SecureJsonlLedger` uses private directory and file modes. It rejects link replacement. It refuses to start when the required secure file operations are unavailable.
+
+## Optional integrations
+
+Observatory does not select an agent runtime or IDE.
+
+- [Integration design](https://github.com/brennenawana/observatory/blob/main/docs/integrations/README.md) explains how adapters connect a host to the contract.
+- [IDE and terminal agents](https://github.com/brennenawana/observatory/blob/main/docs/integrations/IDE_AGENTS.md) covers VS Code, Cursor, Claude Code, and direct terminal agents.
+- If you use Hermes, see the [optional setup recommendation](https://github.com/brennenawana/observatory/blob/main/docs/integrations/HERMES.md).
+
+These documents are recommendations. They are not core requirements.
+
+## Verify
+
+```bash
+python3 -m unittest -v
 python3 -m observatory.selftest
 ```
 
-## Hermes adapter
+The module tests the bundled JSONL reference implementation. It is not a generic `Ledger` protocol conformance runner.
 
-Version `0.2.0` includes a metadata-only Hermes observer. It records local,
-append-only execution evidence without adding a model-visible tool. It does not
-persist prompts, responses, tool argument values, tool result values, commands,
-source code, or file paths.
+Projects must evaluate their implementations against [CONTRACT.md](https://github.com/brennenawana/observatory/blob/main/CONTRACT.md). Adapter repositories must also test their event profiles.
 
-See [HERMES.md](HERMES.md) for the event profile, installation steps, storage
-path, sprint-planning signals, and current limits.
+## Important behavior
 
-## Three things worth knowing before you use it
+### Replay misses raise
 
-**A replay miss raises.** It does not fall through to the live call. That is what makes
-"this run stayed offline" a proof instead of a hope — and the exception type is a plain
-`RuntimeError` subclass on purpose, so a consuming tool that catches its own provider
-errors cannot swallow it and silently turn a replay into a live call.
+A replay miss does not call the live service. This behavior proves that an offline replay stayed offline.
 
-**`self_reported` is not ground truth.** An agent's account of itself is evidence about
-what it *says* it did. The grade travels with every row so a finding built on it can be
-labelled honestly — "the agent reports it read the file", never "the agent read the file".
+### `self_reported` is not direct boundary evidence
 
-**Redaction happens before the write, not after.** A secret's existence is recorded; its
-value never is. The conformance suite plants a real-shaped credential and asserts it is
-absent from the stored bytes, because redaction that is merely believed to work is the
-highest-consequence failure in the whole contract.
+An agent report is evidence about what the agent reports. It is not native evidence of the action.
+
+### Redaction occurs before storage
+
+A secret value must not reach the ledger. The reference self-tests use a planted credential to test this rule.
 
 ## Status
 
-Early. What is here works and is covered by 27 conformance checks; what is not here is
-listed honestly rather than implied.
+The repository includes:
 
-**Built:** the contract; the reference ledger, capture, redactor and probe; the
-conformance suite; and the metadata-only Hermes observer.
+- the generic contract;
+- a reference event and ledger implementation;
+- boundary capture and replay;
+- write-time redaction;
+- readiness probes;
+- a private local JSONL ledger;
+- reference implementation self-tests.
 
-**Not built yet:**
-
-- **Additional adapters.** The Hermes metadata observer ships. Endpoint proxies,
-  other harness hooks, and code-seam wrapping do not ship yet.
-- **The extraction proof.** The real test of whether this abstraction is honest is whether
-  it can replace a working recorder without changing its results. The candidate is a data
-  ingest rig with an exact target to hit — a frozen funnel fingerprint and a 586-entry
-  cassette that replays with the network cut.
-- **Value-level provenance.** Which component produced a number, and what it fell back
-  from. A declared extension point in CONTRACT.md §3, not yet specified.
-- **A second consumer.** [wikiskills-lab](https://github.com/brennenawana/wikiskills-lab)
-  has its own recorder today. It becomes consumer number two by programming against the
-  contract and keeping that recorder as one satisfying implementation — which is also what
-  demonstrates that the substitution actually works.
-
-Two consumers that different, hitting one core, is what keeps an abstraction honest. One
-consumer produces a library shaped like exactly one caller.
+The repository does not include a universal agent schema. It does not include a required agent or IDE adapter.

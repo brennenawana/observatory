@@ -1,12 +1,14 @@
 [project]
-name = "observatory"
+name = "agent-observatory-contract"
 version = "0.2.0"
 description = "A pluggable observability substrate for AI agents and the systems they touch."
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []          # stdlib only, on purpose: it has to drop into anything
 
-[project.entry-points."hermes_agent.plugins"]
-observatory = "observatory.hermes_plugin"
+[project.urls]
+Repository = "https://github.com/brennenawana/observatory"
+Contract = "https://github.com/brennenawana/observatory/blob/main/CONTRACT.md"
 
 [build-system]
 requires = ["setuptools>=61"]
@@ -14,3 +16,12 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["observatory"]
+
+[tool.setuptools.data-files]
+"share/observatory" = ["CONTRACT.md", "CHANGELOG.md"]
+"share/observatory/docs" = ["docs/CAPTURE_PROFILES.md"]
+"share/observatory/docs/integrations" = [
+    "docs/integrations/README.md",
+    "docs/integrations/HERMES.md",
+    "docs/integrations/IDE_AGENTS.md",
+]

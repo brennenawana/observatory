@@ -18,15 +18,28 @@ it says so, and that string is scrubbed wherever it appears at any depth.
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable
+import unicodedata
+from collections.abc import Iterable
+from typing import Any
 
 REDACTED = "[redacted]"
+
+
+def _canonical_key_name(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    return "".join(
+        character
+        for character in normalized
+        if unicodedata.category(character) != "Cf"
+        and not unicodedata.category(character).startswith("M")
+    )
+
 
 #: Key names whose value is a credential regardless of its shape.
 _SECRET_KEY = re.compile(
     r"(authorization|api[-_ ]?key|secret|password|passwd|token|cookie|"
     r"private[-_ ]?key|credential|client[-_ ]?secret|access[-_ ]?key)",
-    re.I,
+    re.IGNORECASE,
 )
 
 #: Value shapes that are credentials regardless of the key they arrived under.
@@ -36,7 +49,9 @@ _VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
     # "Bearer <something long>"
     re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{12,}"),
     # Common vendor prefixes for issued keys.
-    re.compile(r"\b(?:sk|pk|rk|ghp|gho|ghs|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,}"),
+    re.compile(
+        r"\b(?:sk|pk|rk|ghp|gho|ghs|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,}"
+    ),
     # AWS access key id.
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
 )
@@ -52,22 +67,38 @@ class Redactor:
 
     def __init__(self, literals: Iterable[str] = ()) -> None:
         # Short strings would scrub half the corpus; a real credential is not 4 chars.
-        self._literals = tuple(sorted(
-            {s for s in literals if isinstance(s, str) and len(s.strip()) >= 8},
-            key=len,
-            reverse=True,  # longest first, so a prefix cannot mask a longer match
-        ))
+        self._literals = tuple(
+            sorted(
+                {s for s in literals if isinstance(s, str) and len(s.strip()) >= 8},
+                key=len,
+                reverse=True,  # longest first, so a prefix cannot mask a longer match
+            )
+        )
 
     def add_literal(self, value: str) -> None:
         if isinstance(value, str) and len(value.strip()) >= 8:
-            self._literals = tuple(sorted(
-                set(self._literals) | {value}, key=len, reverse=True
-            ))
+            self._literals = tuple(
+                sorted(set(self._literals) | {value}, key=len, reverse=True)
+            )
 
     def scrub(self, value: Any, *, key_hint: str | None = None) -> Any:
         """Return a copy with every detected credential replaced by ``REDACTED``."""
+        if key_hint and _SECRET_KEY.search(_canonical_key_name(key_hint)):
+            return value if value is None or value == "" else REDACTED
         if isinstance(value, dict):
-            return {k: self.scrub(v, key_hint=str(k)) for k, v in value.items()}
+            cleaned: dict[str, Any] = {}
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise TypeError("dictionary keys must be strings")
+                key_text = key
+                safe_key = self._scrub_str(key_text, None)
+                candidate = safe_key
+                suffix = 2
+                while candidate in cleaned:
+                    candidate = f"{safe_key}:{suffix}"
+                    suffix += 1
+                cleaned[candidate] = self.scrub(item, key_hint=key_text)
+            return cleaned
         if isinstance(value, (list, tuple)):
             scrubbed = [self.scrub(v, key_hint=key_hint) for v in value]
             return type(value)(scrubbed) if isinstance(value, tuple) else scrubbed
@@ -76,10 +107,6 @@ class Redactor:
         return value
 
     def _scrub_str(self, text: str, key_hint: str | None) -> str:
-        if key_hint and _SECRET_KEY.search(key_hint):
-            # The key says it is a credential. Keep the fact, drop the value entirely —
-            # a partial reveal of a secret is still a reveal.
-            return REDACTED if text else text
         out = text
         for literal in self._literals:
             if literal in out:

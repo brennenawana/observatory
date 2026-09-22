@@ -1,0 +1,3 @@
+include CONTRACT.md
+include CHANGELOG.md
+recursive-include docs *.md
