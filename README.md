@@ -73,6 +73,10 @@ Observatory does not select an agent runtime or IDE.
 
 These documents are recommendations. They are not core requirements.
 
+## Companion guidebook
+
+[COMPANION.md](https://github.com/brennenawana/observatory/blob/main/COMPANION.md) describes the separate `agent-observability-guidebook` repository. The guidebook applies this contract to coding agents to track spend and identify optimization opportunities. The companion document also describes the relationship between the repositories, an agent reading path, and example prompts.
+
 ## Verify
 
 ```bash
